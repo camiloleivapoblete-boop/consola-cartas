@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Consola de Cartas Realtime</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root {
+            --ancho-carta: 6cm;
+            --alto-carta: 9cm;
+            --color-fondo: #ffffff;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            gap: 20px;
+        }
+
+        #panel-control {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            width: 300px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            position: sticky;
+            top: 20px;
+            height: fit-content;
+        }
+
+        .control-group { display: flex; flex-direction: column; gap: 4px; }
+        label { font-weight: bold; font-size: 13px; color: #333; }
+        input, textarea { padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+
+        .btn { color: white; border: none; padding: 10px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 14px; margin-top: 5px; }
+        .btn-add { background-color: #28a745; }
+        .btn-print { background-color: #007bff; }
+        .btn-clear { background-color: #dc3545; }
+
+        #zona-trabajo { flex-grow: 1; display: flex; flex-direction: column; gap: 20px; }
+        .seccion { background: #e9ecef; padding: 20px; border-radius: 8px; border: 2px dashed #ced4da; }
+        .seccion h3 { margin-top: 0; color: #495057; }
+
+        #mazo-impresion {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.2cm;
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            min-height: 150px;
+        }
+
+        .carta-template {
+            box-sizing: border-box;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            position: relative;
+            border: 1px dashed #666;
+            page-break-inside: avoid;
+        }
+
+        #carta-en-edicion {
+            width: var(--ancho-carta);
+            height: var(--alto-carta);
+            background-color: var(--color-fondo);
+            box-shadow: 0 8px 16px rgba(0,0,0,0.15);
+        }
+
+        .cabecera-carta { display: flex; justify-content: space-between; align-items: center; }
+        .icono-superior { font-size: 18px; }
+        .titulo-carta { font-size: 14px; margin: 0; font-weight: bold; flex-grow: 1; text-align: center;}
+
+        .contenedor-imagen {
+            width: 100%;
+            height: 40%;
+            border: 1px solid #ccc;
+            margin: 5px 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            background-color: #f8f9fa;
+        }
+
+        .imagen-carta { max-width: 100%; max-height: 100%; object-fit: contain; }
+        .contenido-central { text-align: center; flex-grow: 1; display: flex; flex-direction: column; justify-content: flex-start; gap: 4px; }
+        .descripcion-carta { font-size: 10px; margin: 0; white-space: pre-wrap; text-align: left;}
+        .icono-inferior { font-size: 18px; text-align: right; }
+
+        @media print {
+            body { background: white; padding: 0; margin: 0; }
+            #panel-control, .seccion h3, #previsualizacion-contenedor { display: none !important; }
+            #zona-trabajo { width: 100%; }
+            #mazo-impresion { padding: 0; gap: 0; border: none; }
+            .carta-template { box-shadow: none !important; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="panel-control">
+        <h2>Consola Realtime</h2>
+        <hr>
+        <div class="control-group">
+            <label>Ancho (cm):</label>
+            <input type="number" id="input-ancho" value="6" step="0.1">
+        </div>
+        <div class="control-group">
+            <label>Alto (cm):</label>
+            <input type="number" id="input-alto" value="9" step="0.1">
+        </div>
+        <div class="control-group">
+            <label>Color Fondo:</label>
+            <input type="color" id="input-color" value="#ffffff">
+        </div>
+        <div class="control-group">
+            <label>Color Texto:</label>
+            <input type="color" id="input-color-texto" value="#000000">
+        </div>
+        <div class="control-group">
+            <label>Imagen Local:</label>
+            <input type="file" id="input-imagen" accept="image/*">
+        </div>
+        <div class="control-group">
+            <label>Ícono:</label>
+            <input type="text" id="input-icono" value="🌟">
+        </div>
+        <div class="control-group">
+            <label>Título:</label>
+            <input type="text" id="input-titulo" value="Nueva Carta">
+        </div>
+        <div class="control-group">
+            <label>Descripción:</label>
+            <textarea id="input-descripcion" rows="3">Escribe aquí...</textarea>
+        </div>
+
+        <button class="btn btn-add" id="btn-guardar" onclick="subirCarta_FlujoCompleto()">📥 Guardar en Mazo Compartido</button>
+        <button class="btn btn-print" onclick="window.print()">🖨️ Imprimir Mazo</button>
+        <button class="btn btn-clear" onclick="borrarMazoNube()">🗑️ Vaciar Mazo Nube</button>
+    </div>
+
+    <div id="zona-trabajo">
+        <div class="seccion" id="previsualizacion-contenedor">
+            <h3>1. Tu Diseño Local (Previsualización)</h3>
+            <div id="carta-en-edicion" class="carta-template">
+                <div class="cabecera-carta">
+                    <div class="icono-superior" id="carta-icono-sup">🌟</div>
+                    <p class="titulo-carta" id="carta-titulo">Nueva Carta</p>
+                </div>
+                <div class="contenedor-imagen">
+                    <img src="" alt="Previa" id="carta-imagen-preview" class="imagen-carta" style="display: none;">
+                </div>
+                <div class="contenido-central">
+                    <p class="descripcion-carta" id="carta-descripcion">Escribe aquí...</p>
+                </div>
+                <div class="icono-inferior" id="carta-icono-inf">🌟</div>
+            </div>
+        </div>
+
+        <div class="seccion">
+            <h3>2. Mazo en la Nube (Sincronizado en tiempo real)</h3>
+            <div id="mazo-impresion"></div>
+        </div>
+    </div>
+
+    <script>
+        // CONFIGURACIÓN DE CREDENCIALES
+        const SUPABASE_URL = "https://wpvogropaualtgdqycry.supabase.co";
+        const SUPABASE_KEY = "sb_publishable_qAXQKePwCAvG-jDsgeKkvg_Yej7O4ql";
+        
+        const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // Nodos del DOM
+        const inputAncho = document.getElementById('input-ancho');
+        const inputAlto = document.getElementById('input-alto');
+        const inputColor = document.getElementById('input-color');
+        const inputColorTexto = document.getElementById('input-color-texto');
+        const inputImagen = document.getElementById('input-imagen');
+        const inputIcono = document.getElementById('input-icono');
+        const inputTitulo = document.getElementById('input-titulo');
+        const inputDescripcion = document.getElementById('input-descripcion');
+        const cartaEdicion = document.getElementById('carta-en-edicion');
+        const mazo = document.getElementById('mazo-impresion');
+        const imagenPreview = document.getElementById('carta-imagen-preview');
+        const btnGuardar = document.getElementById('btn-guardar');
+
+        let imagenTemporalBase64 = "";
+        let archivoImagenObjeto = null;
+
+        // Actualización Visual Local inmediata
+        function actualizarCartaLocal() {
+            document.documentElement.style.setProperty('--ancho-carta', inputAncho.value + 'cm');
+            document.documentElement.style.setProperty('--alto-carta', inputAlto.value + 'cm');
+            document.documentElement.style.setProperty('--color-fondo', inputColor.value);
+            cartaEdicion.style.color = inputColorTexto.value;
+            document.getElementById('carta-icono-sup').innerText = inputIcono.value;
+            document.getElementById('carta-icono-inf').innerText = inputIcono.value;
+            document.getElementById('carta-titulo').innerText = inputTitulo.value;
+            document.getElementById('carta-descripcion').innerText = inputDescripcion.value;
+        }
+
+        // Carga de imagen local en memoria previa
+        inputImagen.addEventListener('change', function(e) {
+            archivoImagenObjeto = e.target.files[0];
+            if (archivoImagenObjeto) {
+                const lector = new FileReader();
+                lector.onload = function(event) {
+                    imagenPreview.src = event.target.result;
+                    imagenPreview.style.display = 'block';
+                }
+                lector.readAsDataURL(archivoImagenObjeto);
+            }
+        });
+
+        // FLUJO: SUBIR IMAGEN + SUBIR DATOS
+        async function subirCarta_FlujoCompleto() {
+            btnGuardar.disabled = true;
+            btnGuardar.innerText = "Subiendo archivo...";
+            
+            let urlPublicaImagen = "";
+
+            if (archivoImagenObjeto) {
+                // Nombre único para evitar colisiones en la nube
+                const nombreArchivo = `${Date.now()}_${archivoImagenObjeto.name}`;
+                
+                // 1. Guardar archivo físico en el Storage de Supabase
+                const { data: uploadData, error: uploadError } = await _supabase.storage
+                    .from('imagenes-cartas')
+                    .upload(nombreArchivo, archivoImagenObjeto);
+
+                if (uploadError) {
+                    alert("Error subiendo imagen: " + uploadError.message);
+                    btnGuardar.disabled = false;
+                    btnGuardar.innerText = "📥 Guardar en Mazo Compartido";
+                    return;
+                }
+
+                // 2. Extraer el link público de esa imagen remota
+                const { data: urlData } = _supabase.storage
+                    .from('imagenes-cartas')
+                    .getPublicUrl(nombreArchivo);
+                
+                urlPublicaImagen = urlData.publicUrl;
+            }
+
+            btnGuardar.innerText = "Guardando carta...";
+
+            // 3. Insertar registro de texto y link en la tabla de datos
+            const { error: dbError } = await _supabase.from('cartas').insert([{
+                titulo: inputTitulo.value,
+                descripcion: inputDescripcion.value,
+                icono: inputIcono.value,
+                color_fondo: inputColor.value,
+                color_texto: inputColorTexto.value,
+                ancho: parseFloat(inputAncho.value),
+                alto: parseFloat(inputAlto.value),
+                url_imagen: urlPublicaImagen
+            }]);
+
+            if(dbError) alert("Error base de datos: " + dbError.message);
+
+            // Resetear input de imagen local
+            inputImagen.value = "";
+            archivoImagenObjeto = null;
+            imagenPreview.src = "";
+            imagenPreview.style.display = 'none';
+            btnGuardar.disabled = false;
+            btnGuardar.innerText = "📥 Guardar en Mazo Compartido";
+        }
+
+        // LEER LA NUBE Y RE-RENDERIZAR TODO EL MAZO
+        async function renderizarMazoNube() {
+            const { data: cartas, error } = await _supabase
+                .from('cartas')
+                .select('*')
+                .order('id', { ascending: true });
+            
+            if (error) return;
+            
+            mazo.innerHTML = '';
+            
+            cartas.forEach(c => {
+                const nuevaCarta = document.createElement('div');
+                nuevaCarta.className = 'carta-template';
+                nuevaCarta.style.width = c.ancho + 'cm';
+                nuevaCarta.style.height = c.alto + 'cm';
+                nuevaCarta.style.backgroundColor = c.color_fondo;
+                nuevaCarta.style.color = c.color_texto;
+                
+                let divImagen = `<div class="contenedor-imagen"></div>`;
+                if(c.url_imagen) {
+                    divImagen = `
+                        <div class="contenedor-imagen">
+                            <img src="${c.url_imagen}" alt="Carta" class="imagen-carta">
+                        </div>
+                    `;
+                }
+
+                nuevaCarta.innerHTML = `
+                    <div class="cabecera-carta">
+                        <div class="icono-superior">${c.icono}</div>
+                        <p class="titulo-carta">${c.titulo}</p>
+                    </div>
+                    ${divImagen}
+                    <div class="contenido-central">
+                        <p class="descripcion-carta">${c.descripcion.replace(/\n/g, '<br>')}</p>
+                    </div>
+                    <div class="icono-inferior">${c.icono}</div>
+                `;
+                mazo.appendChild(nuevaCarta);
+            });
+        }
+
+        async function borrarMazoNube() {
+            if(confirm("¿Seguro que quieres vaciar el mazo de internet para TODOS?")) {
+                await _supabase.from('cartas').delete().neq('id', 0);
+            }
+        }
+
+        // OYENTE EN TIEMPO REAL (Escucha inserciones y eliminaciones)
+        _supabase.channel('cambios-reales')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'cartas' }, () => {
+                renderizarMazoNube();
+            })
+            .subscribe();
+
+        // Inicializadores de eventos locales
+        [inputAncho, inputAlto, inputColor, inputColorTexto, inputIcono, inputTitulo, inputDescripcion].forEach(i => i.addEventListener('input', actualizarCartaLocal));
+        actualizarCartaLocal();
+        renderizarMazoNube(); // Carga inicial al abrir la página
+    </script>
+</body>
+</html>
